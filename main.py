@@ -2,62 +2,82 @@ import xml.etree.ElementTree as ET
 import os
 import sys
 import re
-
+import Stemmer
 from stemming.porter import stem
 import threading
-
+from nltk.stem.porter import *
 
 reload(sys)
+
+
 if(len(sys.argv)!=3):
     print("Insufficient number of arguments")
     exit()
+def is_ascii(s):
+    return all(ord(c) < 128 for c in s)
 stemmer={}
 file_name=sys.argv[1]
 output_file=sys.argv[2]
 length={}
-class compute_parallel(threading.Thread):
+class compute_parallel():
     def __init__(self,text,stopwords,id):
-        threading.Thread.__init__(self)
         self.text=text
         self.stopwords=stopwords
         self.id=id
         #self._return = None
 
-    def stemming(self,low,res):
-        res[0]=stem(low)
 
     def run(self):
             id=str(self.id)
             global word_dict
             global categ_dict
-            global stemmer
             stopwords=self.stopwords
-            text= re.split("[^a-zA-Z]+", self.text)
-            category_text= re.findall('Category:[a-zA-Z ]+',self.text)
+            #self.text=re.sub(r'^https?:\/\/.*[\r\n]*', '', self.text, flags=re.MULTILINE)
+            text= re.sub(r"[-.]",'',self.text)
+            text= re.split("[^A-Za-z]", self.text)
+            info_text=re.findall(r'{{Infobox+([\w\W]*)[$}]',self.text)
+            info_text=re.sub(r'[-.]', '', str(info_text), flags=re.MULTILINE)
+            info_text= re.split("[^0-9A-Za-z]", str(info_text))
+
+            #category_text= re.findall('Category:[a-zA-Z ]+',self.text)
             dictionary={}
 
             for row in text:
-                row= re.sub(r'^https?:\/\/.*[\r\n]*', '', row, flags=re.MULTILINE)
-                low= row.lower()
-                if(low not in stopwords):
-                    stems=None
-                    if(low in stemmer):
-                        stems=stemmer[low]
-                    else:
-                        stems=stem(low)
-                        stemmer[low]=stems
+                row=row.split(' ')
+                for word in row:
+                    low= word.lower()
+                    if(low not in stopwords):
+                        stems=None
+                        if(low in stemmer):
+                            stems=stemmer[low]
+                        else:
+                            stems=stem(low)
+                            stemmer[low]=stems
 
-                    if(stems in dictionary):
-                        dictionary[stems]+=dictionary[stems]+1
-                        #print(stems)
-                        #print(dictionary[stems])
-                    else:
-                        dictionary[stems]=1
+                        if(stems in dictionary):
+                            dictionary[stems]+=1
+
+                        else:
+                            dictionary[stems]=1
 
             length[str(id)]=len(text)
             text= re.split("[^0-9]+", self.text)
             for row in text:
-                low= row.lower()
+                low= row
+                if(low not in stopwords and len(row)<4):
+                    stems=low
+                    if(stems in dictionary):
+                        dictionary[stems]+=dictionary[stems]+1
+
+                    else:
+                        dictionary[stems]=1
+
+            info_dictionary={}
+
+            for word in info_text:
+                low=word.lower()
+                if(low=="n"):
+                    continue
                 if(low not in stopwords):
                     stems=None
                     if(low in stemmer):
@@ -66,43 +86,24 @@ class compute_parallel(threading.Thread):
                         stems=stem(low)
                         stemmer[low]=stems
 
-                    if(stems in dictionary):
-                        dictionary[stems]+=dictionary[stems]+1
+                    if(stems in info_dictionary):
+                        info_dictionary[stems]+=1
 
                     else:
-                        dictionary[stems]=1
+                        info_dictionary[stems]=1
 
             if(length[str(id)]):
                 length[str(id)]+=len(text)
-            cat={}
-            for word in category_text:
-                words= word.split(":")
-                low= words[1].lower()
-                '''if(low not in stopwords):
 
-                    stems= stem(low)
-                    if(stem in cat):
-                        cat[stems]+=1
-                    else:
-                        cat[stems]=1
-                '''
-                word=re.split("[: ]",word)
+            for row in info_dictionary:
+                if(row==None or row==''):
+                    continue
 
-                for sub_word in word:
-                    if(sub_word != "Category"):
-                        low= sub_word.lower()
+                if(row+ ';i' not in word_dict):
+                    word_dict[row+';i']= str(id) + '-' + str(info_dictionary[row]) + ':'
+                else:
+                    word_dict[row+';i']= word_dict[row+';i'] + str(id) + '-' + str(info_dictionary[row]) + ':'
 
-                        if(low not in stopwords):
-                            stems=None
-                            if(low in stemmer):
-                                stems=stemmer[low]
-                            else:
-                                stems=stem(low)
-                                stemmer[low]=stems
-                            if(stems in cat):
-                                cat[stems]+=1
-                            else:
-                                cat[stems]=1
 
             for row in dictionary:
                 if(row==None or row==''):
@@ -111,22 +112,16 @@ class compute_parallel(threading.Thread):
                     word_dict[row+ ';p']= str(id) + '-' + str(dictionary[row]) + ':'
                 else:
                     word_dict[row+';p']= word_dict[row+';p'] + str(id) + '-' + str(dictionary[row]) + ':'
-            for row in cat:
-                if(row==None or row==''):
-                    continue
-                if( row+';c' not in word_dict):
-                    word_dict[row+';c']= id+ '-' + str(cat[row]) + ':'
-                else:
-                    word_dict[row+';c']= word_dict[row+ ';c']+ id+ '-' + str(cat[row]) + ':'
 
+            info_dictionary={}
             cat={}
             dictionary={}
 
-
+secondary=[]
 categ_dict={}
 word_dict={}
-thread=[]
-allowed_docs=100
+
+allowed_docs=10000
 count_docs=0;
 #file_name="./wiki.xml"
 stopwords_filename="stopwords.txt"
@@ -146,77 +141,83 @@ def create_stopwords(filename):
             dic[ words[0]]=True
     return dic
 
-def sorted_file(fl1,fl2):
-    fle2=open("Chunk"+str(fl2),"r")
-    fle1=open("Chunk"+str(fl1),"r")
-    fle=open("temp","w")
-    line1=fle1.readline()
-    line2=fle2.readline()
-    j=0
-    while line1 and line2:
-        #print(j)
-        word1=line1.split(":")
-        word2=line2.split(":")
-        if(word1[0]==word2[0]):
-            tp=line1[:-1]
-            #print(line1[:-1],end=" ")
-            leng= len(word2)
 
-            '''i=0
 
-            for row in word1:
-                if(i==leng-1):
-                    break
-                tp=tp+row+":"
-                i+=1
-            '''
-            i=0
-            for row in word2:
-                if(i==0 or i ==leng-1):
-                    i+=1
-                    continue
-                tp=tp+ str(word2[i])+":"
 
-                i+=1
-            tp=tp+"\n"
-            fle.write(tp)
-            line1=fle1.readline()
-            line2=fle2.readline()
-        elif(word1[0]<word2[0]):
-            fle.write(line1)
-            #print(line1)
-            line1= fle1.readline()
+def merge():
+    global secondary
+    global offset
+    global chunk
+    global numofdoc
+    global output_file
+    last=None
+    offtxt= open("offset.txt",'w+')
+    files = [open("Chunk"+str(i)) for i in range(chunk)]
+    com_read=[0 for i in range(chunk)]
+    lines = [j.readline() for j in files]
+    k=0
+    out=0
+    outtxt= open(output_file+ str(out),'w+')
+    while 1:
+        words=[]
+        postings=[]
+        for i in range(len(lines)):
+            if com_read[i]==0:
+                #print(lines[i])
+                tmp=lines[i].split('=')
+                tmp1=tmp[0]
+                tmp2=tmp[1]
+                words.append(tmp1)
+                postings.append(tmp2.rstrip())
 
-        elif(word1[0]> word2[0]):
-            fle.write(line2)
-            line2= fle2.readline()
-        j+=1
+            else:
+                words.append('~')
+                postings.append('~')
 
-    while(line1):
-        fle.write(line1)
-        line1= fle1.readline()
+        mini=min(words)
+        ind=[]
+        for i in range(len(words)):
+            if words[i]==mini and com_read[i]==0:
+                ind.append(i)
 
-    while(line2):
-        fle.write(line2)
-        line2= fle2.readline()
+        to_write=mini+'='
+        to_write1=''
+        for i in ind:
+            to_write+=postings[i]
+            line= files[i].readline()
+            if not line:
+                lines[i]="~"
+                com_read[i]=1
+            else:
+                lines[i]=line
 
-    fle1.close()
-    fle2.close()
-    fle.close()
-    os.remove("Chunk"+str(fl1))
-    os.remove("Chunk"+str(fl2))
-    os.rename("temp", "Chunk"+ str(fl1) )
-    return fl1
+        offtet=mini+' '+str(offset)
+        last=mini
+        offset+=(len(to_write)+1)
+        offtxt.write(offtet+'\n')
+        outtxt.write(to_write+'\n');
+        flag=0
+        if(k%100000==0 and k!=0):
+            #   print(mini)
+            secondary.append(mini)
+            outtxt.close()
+            out+=1
+            outtxt= open(output_file+ str(out),'w+')
 
-def merge(l,r):
-    mid=l+ (r-l)/2;
-    if(l==r):
-        return l
-    #print(l,mid,r)
-    fl1=merge(l,mid);
-    fl2=merge(mid+1,r);
-    fl=sorted_file(fl1,fl2)
-    return fl
+
+
+        for i in range(chunk):
+            if com_read[i]==0:
+                flag=1
+        if flag==0:
+            break
+        k+=1
+
+    secondary.append(last)
+    outtxt.close()
+    offtxt.close()
+
+
 title_dict={}
 title_st={}
 chunk=0
@@ -244,11 +245,11 @@ for event, elem in ET.iterparse(file_name, events=(start, end)):
                 pass
             else:
                 titles=redirect_title[11: -2]
-                #print(redirect_title)
                 if(titles in title_dict):
                     title_dict[titles]+=1
                 else:
                     title_dict[titles]=1
+            '''
             text= re.split("[^a-zA-Z]+", str(elem.attrib))
             temp={}
             for row in text:
@@ -274,19 +275,54 @@ for event, elem in ET.iterparse(file_name, events=(start, end)):
                     word_dict[row + ';t']= word_dict[row+';t'] + str(id) + '-' + str(temp[row]) + ':'
 
             temp={}
+            '''
 
 
     else:
         if(tname == "title"):
             title= elem.text
+            text=elem.text
+            ''''
+            if(str(text).decode("utf-8")+ ';t' not in word_dict):
+                word_dict[str(text).decode("utf-8") + ';t']=  str(id) + '-' + str(1) + ':'
+            else:
+                word_dict[str(text).decode("utf-8") + ';t']= word_dict[str(text).decode("utf-8")+';t'] + str(id) + '-' + str(1) + ':'
+            '''
+            text= re.split("[^a-zA-Z]+", text)
+            temp={}
+            for row in text:
+                if(not is_ascii(row)):
+                    continue
+                low=row.encode('ascii','ignore').lower()
+                if(low not in stopwords):
+                    stems=None
+                    if(low in stemmer):
+                        stems=stemmer[low]
+                    else:
+                        stems=stem(low)
+                        stemmer[low]=stems
+                    if(stems in temp):
+                        temp[stems]+=1
+                    else:
+                        temp[stems]=1
+
+            for row in temp:
+                if(row==None or row==''):
+                    continue
+                if(row+ ';t' not in word_dict):
+                    word_dict[row + ';t']=  str(id) + '-' + str(temp[row]) + ':'
+                else:
+                    word_dict[row + ';t']= word_dict[row+';t'] + str(id) + '-' + str(temp[row]) + ':'
+
+            temp={}
         elif(tname == "id" and not revision ):
             id= elem.text
             map_title[title]=id
         elif(tname == "text"):
             text= elem.text
             if(text is not None):
-                thread.append(compute_parallel(text,stopwords,id))
-                thread[-1].run()
+                thread=compute_parallel(text,stopwords,id)
+                thread.run()
                 j+=1;
 
             print(i)
@@ -300,55 +336,49 @@ for event, elem in ET.iterparse(file_name, events=(start, end)):
         elif(tname=="page"):
             if(count_docs==allowed_docs):
                 count_docs=0
-                chunk+=1
+
                 fle=open("Chunk"+str(chunk),"w+")
                 for key in sorted(word_dict):
-                    fle.write(key.decode("utf-8").encode("utf-8")+":" +word_dict[key].encode("utf-8") +'\n')
+                    fle.write(key.encode("utf-8")+"=" +word_dict[key] +'\n')
                 fle.close()
+                chunk+=1
                 word_dict={}
                 stemmer={}
 
-        if(i>=500):
-            break
 
-chunk+=1
+
+offset=0
 fle=open("Chunk"+str(chunk),"w+")
 for key in sorted(word_dict):
-    fle.write(key.decode("utf-8").encode("utf-8")+":" +word_dict[key].encode("utf-8") +'\n')
+    fle.write(key.encode("utf-8"))
+    fle.write("="+word_dict[key] +"\n")
 fle.close()
-#merge()
-#print(title_dict)
-#output_file="output_file.txt"
-num=merge(1,chunk)
-os.rename("Chunk"+str(num),output_file)
-'''
-fle=open(output_file,"w+")
+chunk+=1
 
-for i in range(1,chunk+1):
-    fl=open("Chunk"+str(i),"r")
-    for row in fl:
-        #print(row)
-        fle.write(row)
-    fl.close()
-fle.close()
-'''
+merge()
+for i in range(chunk):
+    os.remove("Chunk"+str(i))
 fle=open("title_file.txt","w+")
 for row in map_title:
     if(row in title_dict):
         fle.write(str(map_title[row]).encode("utf-8")+ ": " + str(row.encode("utf-8")) + ": " +str(title_dict[row])+": ")
-        if(length[map_title[row]):
+        if(length[map_title[row]]):
             fle.write(str(length[map_title[row]])+"\n")
         else:
             fle.write("0\n")
     else:
         fle.write(str(map_title[row]).encode("utf-8")+ ": " + str(row.encode("utf-8")) + ": 0 :")
-        if(length[map_title[row]):
+        if(length[map_title[row]]):
             fle.write(str(length[map_title[row]])+"\n")
         else:
             fle.write("0\n")
 
 fle.close()
+fle=open("secondary_indexing.txt",'w')
+for word in secondary:
+    fle.write(word+"\n")
 
+fle.close()
 word_dict={}
 categ_dict={}
 
